@@ -28,6 +28,7 @@ struct Home: View {
     @State private var isSeeking: Bool = false
     @State private var progress: CGFloat = 0.0
     @State private var lastDraggedProgress: CGFloat = 0
+    @State private var isObserverAdded: Bool = false
     
     // MARK: - BODY
     var body: some View {
@@ -48,6 +49,21 @@ struct Home: View {
                                     PlayBackControls()
                                 }
                         }
+                        .overlay(content: {
+                            HStack(spacing: 60) {
+                                DoubleTapSeek {
+                                    /// Seeking 15 sec backward
+                                    let seconds = player.currentTime().seconds - 15
+                                    player.seek(to: .init(seconds: seconds, preferredTimescale: 1))
+                                }
+                                
+                                DoubleTapSeek(isForward: true) {
+                                    /// Seeking 15 sec forward
+                                    let seconds = player.currentTime().seconds + 15
+                                    player.seek(to: .init(seconds: seconds, preferredTimescale: 1))
+                                }
+                            }
+                        })
                         .onTapGesture {
                             withAnimation(.easeInOut(duration: 0.35)) {
                                 showPlayerControls.toggle()
@@ -88,6 +104,7 @@ struct Home: View {
         }
         .padding(.top, safeArea.top)
         .onAppear {
+            guard !isObserverAdded else { return }
             /// Adding Observer to update seeker when the video is playing
             player?.addPeriodicTimeObserver(forInterval: .init(seconds: 1, preferredTimescale: 1), queue: .main, using: { time in
                 /// Calculating Video Progress
@@ -109,6 +126,7 @@ struct Home: View {
                     }
                 }
             })
+            isObserverAdded = true
         }
     }
     
