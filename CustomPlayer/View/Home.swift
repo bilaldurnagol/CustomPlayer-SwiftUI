@@ -29,11 +29,16 @@ struct Home: View {
     @State private var progress: CGFloat = 0.0
     @State private var lastDraggedProgress: CGFloat = 0
     @State private var isObserverAdded: Bool = false
+    @State private var draggingImage: UIImage?
+    @State private var playerStatusObserver: NSKeyValueObservation?
+    /// Video Seeker Thumbnails
+    @State private var thumbnailFrames: [UIImage] = []
+    @State private var isRotated: Bool = false
     
     // MARK: - BODY
     var body: some View {
         VStack(spacing: 0) {
-            let videoPlayerSize: CGSize = .init(width: size.width, height: size.height / 3.5)
+            let videoPlayerSize: CGSize = .init(width: isRotated ? size.height : size.width, height: isRotated ? size.width : size.height / 3.5)
             
             /// custom video player
             ZStack {
@@ -54,13 +59,13 @@ struct Home: View {
                                 DoubleTapSeek {
                                     /// Seeking 15 sec backward
                                     let seconds = player.currentTime().seconds - 15
-                                    player.seek(to: .init(seconds: seconds, preferredTimescale: 1))
+                                    player.seek(to: .init(seconds: seconds, preferredTimescale: 600))
                                 }
                                 
                                 DoubleTapSeek(isForward: true) {
                                     /// Seeking 15 sec forward
                                     let seconds = player.currentTime().seconds + 15
-                                    player.seek(to: .init(seconds: seconds, preferredTimescale: 1))
+                                    player.seek(to: .init(seconds: seconds, preferredTimescale: 600))
                                 }
                             }
                         })
@@ -74,13 +79,47 @@ struct Home: View {
                                 timeoutControls()
                             }
                         }
+                        .overlay(alignment: .bottomLeading, content: {
+                            SeekerThumbnailView(videoPlayerSize)
+                                .offset(y: isRotated ? -85 : -60)
+                        })
                         .overlay(alignment: .bottom) {
                             VideoSeekerView(videoPlayerSize)
+                                .offset(y: isRotated ? -15 : 0)
                         }
                 }
               
             }
+            .background(content: {
+                Rectangle()
+                    .fill(.black)
+                    /// since view is rotated the trailing side is bottom
+                    .padding(.trailing, isRotated ? -safeArea.bottom : 0)
+            })
+            .gesture(
+                DragGesture()
+                    .onEnded({ value in
+                        if -value.translation.height > 100 {
+                            /// Rotate Player
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isRotated = true
+                            }
+                        } else {
+                            /// Go to normal position
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isRotated = false
+                            }
+                        }
+                    })
+            )
             .frame(width: videoPlayerSize.width, height: videoPlayerSize.height)
+            /// To Avoid view expansion set it is native view height
+            .frame(width: size.width, height: size.height / 3.5, alignment: .bottomLeading)
+            .offset(y: isRotated ? -((size.height / 3.5)) : 0)
+            .rotationEffect(.init(degrees: isRotated ? 90 : 0), anchor: .topLeading)
+            /// Making it top view
+            .zIndex(10000)
+            
             
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 10) {
@@ -106,7 +145,7 @@ struct Home: View {
         .onAppear {
             guard !isObserverAdded else { return }
             /// Adding Observer to update seeker when the video is playing
-            player?.addPeriodicTimeObserver(forInterval: .init(seconds: 1, preferredTimescale: 1), queue: .main, using: { time in
+            player?.addPeriodicTimeObserver(forInterval: .init(seconds: 1, preferredTimescale: 600), queue: .main, using: { time in
                 /// Calculating Video Progress
                 if let currentPlayerItem = player?.currentItem {
                     let totalDuration = currentPlayerItem.duration.seconds
@@ -127,9 +166,63 @@ struct Home: View {
                 }
             })
             isObserverAdded = true
+            
+            /// Before Generating Thumbnails, Check if the video is Loaded
+            playerStatusObserver = player?.observe(\.status, options: .new, changeHandler: { player, _ in
+                if player.status == .readyToPlay {
+                    generateThumbnailFrames()
+                }
+            })
+        }
+        .onDisappear {
+            /// Clearing Observers
+            playerStatusObserver?.invalidate()
         }
     }
     
+    /// Dragging Thumbnail View
+    @ViewBuilder
+    func SeekerThumbnailView(_ videoSize: CGSize) -> some View {
+        let thumbSize: CGSize = .init(width: 175, height: 100)
+        ZStack {
+           
+            
+            if let draggingImage {
+                Image(uiImage: draggingImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: thumbSize.width, height: thumbSize.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .overlay(alignment: .bottom, content: {
+                        if let currentItem = player?.currentItem {
+                            Text(CMTime(seconds: progress * currentItem.duration.seconds, preferredTimescale: 600).toTimeString())
+                                .font(.callout)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                                .offset(y: 25)
+                        }
+                    })
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(.white, lineWidth: 2.0)
+                    }
+            } else {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(.black)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(.white, lineWidth: 2)
+                    }
+            }
+            
+        }
+        .frame(width: thumbSize.width, height: thumbSize.height)
+        .opacity(isDragging ? 1 : 0)
+        /// Moving Along side with Gesture
+        /// Adding some padding at start and End
+        .offset(x: progress * (videoSize.width - thumbSize.width - 20))
+        .offset(x: 10)
+    }
     /// Video Seeker View
     @ViewBuilder
     func VideoSeekerView(_ videoSize: CGSize) -> some View {
@@ -139,19 +232,20 @@ struct Home: View {
             
             Rectangle()
                 .fill(.red)
-                .frame(width: max(size.width * progress, 0))
+                .frame(width: max(videoSize.width * progress, 0))
         }
         .frame(height: 3.0)
         .overlay(alignment: .leading) {
             Circle()
                 .fill(.red)
                 .frame(width: 15, height: 15)
-                .scaleEffect(showPlayerControls || isDragging ? 1 : 0.001, anchor: progress * size.width > 15 ? .trailing : .leading)
+                .scaleEffect(showPlayerControls || isDragging ? 1 : 0.001,
+                             anchor: progress * videoSize.width > 15 ? .trailing : .leading)
             /// for more dragging space
                 .frame(width: 50, height: 50)
                 .contentShape(Rectangle())
             /// Moving Along side with gesture progress
-                .offset(x: size.width * progress)
+                .offset(x: videoSize.width * progress)
                 .gesture(DragGesture()
                     .updating($isDragging, body: { _, out, _ in
                         out = true
@@ -169,6 +263,12 @@ struct Home: View {
                         progress = max(min(calculatedProgress, 1), 0)
                         isSeeking = true
                         
+                        let dragIndex = Int(progress / 0.01)
+                        /// Checking if thumbnails contains the frame
+                        if thumbnailFrames.indices.contains(dragIndex) {
+                            draggingImage = thumbnailFrames[dragIndex]
+                        }
+                        
                     })
                     .onEnded({ value in
                         /// Storing last known proggress
@@ -176,7 +276,7 @@ struct Home: View {
                         /// Seeking Video To Dragged Time
                         if let currentPlayerTime = player?.currentItem {
                             let totalDuration = currentPlayerTime.duration.seconds
-                            player?.seek(to: .init(seconds: totalDuration * progress, preferredTimescale: 1))
+                            player?.seek(to: .init(seconds: totalDuration * progress, preferredTimescale: 600))
                             
                             /// Re-Scheduling Timeout Task
                             if isPlaying {
@@ -298,6 +398,38 @@ struct Home: View {
         /// Scheduling Task
         if let timeoutTask {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timeoutTask)
+        }
+    }
+    
+    /// Generating Thumbnail Frames
+    func generateThumbnailFrames() {
+        Task.detached {
+            guard let asset = player?.currentItem?.asset else { return }
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            /// Min Size
+            generator.maximumSize = .init(width: 250, height: 250)
+            do {
+                let totalDuration = try await asset.load(.duration).seconds
+                var frameTimes: [CMTime] = []
+                /// Frame Timings
+                /// 1/0.1 = 100 (frames)
+                for progress in stride(from: 0, to: 1, by: 0.01) {
+                    let time = CMTime(seconds: progress * totalDuration, preferredTimescale: 600)
+                    frameTimes.append(time)
+                }
+                
+                /// Generating frame images
+                for await result in generator.images(for: frameTimes) {
+                    let cgImage = try result.image
+                        /// Adding Frame image
+                    await MainActor.run(body: {
+                        thumbnailFrames.append(UIImage(cgImage: cgImage))
+                    })
+                }
+            } catch {
+                print(error.localizedDescription)
+            }
         }
     }
 }
